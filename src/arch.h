@@ -135,6 +135,27 @@ const int PERF_REG_PC = 32;  // PERF_REG_POWERPC_NIP
 #define callerFP()        __builtin_frame_address(1)
 #define callerSP()        __builtin_frame_address(0)
 
+#elif defined(__s390x__)
+
+typedef unsigned short instruction_t;
+const instruction_t BREAKPOINT = 0x0001;
+const int BREAKPOINT_OFFSET = 0;
+
+const int SYSCALL_SIZE = sizeof(instruction_t);
+const int FRAME_PC_SLOT = 1;    // C ABI save area stores return_pc at slot 1
+const int PROBE_SP_LIMIT = 0;
+const int PLT_HEADER_SIZE = 32;
+const int PLT_ENTRY_SIZE = 32;
+const int PERF_REG_PC = 33;     // PERF_REG_S390_PC
+
+#define spinPause()       // No architecture support
+#define rmb()             asm volatile ("bcr 15,0" : : : "memory")
+#define flushCache(addr)  __builtin___clear_cache((char*)(addr), (char*)(addr) + sizeof(instruction_t))
+
+#define callerPC()        __builtin_return_address(0)
+#define callerFP()        __builtin_frame_address(1)
+#define callerSP()        __builtin_frame_address(0)
+
 #elif defined(__riscv) && (__riscv_xlen == 64)
 
 typedef unsigned int instruction_t;

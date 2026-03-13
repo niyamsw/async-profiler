@@ -76,6 +76,14 @@ CPP_TEST_SOURCES := test/native/testRunner.cpp $(shell find test/native -name '*
 CPP_TEST_HEADER := test/native/testRunner.hpp
 CPP_TEST_INCLUDES := -Isrc -Itest/native
 
+ifeq ($(ARCH_TAG),s390x)
+MULTIPLEMATCHING_SRC := test/native/libs/multiplematching_s390.s
+TWICEATZERO_SRC := test/native/libs/twiceatzero_s390.s
+else
+MULTIPLEMATCHING_SRC := test/native/libs/multiplematching.s
+TWICEATZERO_SRC := test/native/libs/twiceatzero.s
+endif
+
 ifeq ($(JAVA_HOME),)
   JAVA_HOME:=$(shell java -cp . JavaHome)
 endif
@@ -118,6 +126,8 @@ ifeq ($(ARCH_TAG),)
     ARCH_TAG=arm32
   else ifeq ($(ARCH),ppc64le)
     ARCH_TAG=ppc64le
+  else ifeq ($(ARCH),s390x)
+	ARCH_TAG=s390x
   else ifeq ($(ARCH),riscv64)
     ARCH_TAG=riscv64
   else ifeq ($(ARCH),loongarch64)
@@ -236,10 +246,10 @@ ifeq ($(OS_TAG),linux)
 	$(CC) -c -shared -fPIC -o $(TEST_LIB_DIR)/vaddrdif.o test/native/libs/vaddrdif.c
 	$(LD) -N -shared -o $(TEST_LIB_DIR)/libvaddrdif.$(SOEXT) $(TEST_LIB_DIR)/vaddrdif.o -T test/native/libs/vaddrdif.ld
 
-	$(AS) -o $(TEST_LIB_DIR)/multiplematching.o test/native/libs/multiplematching.s
+	$(AS) -o $(TEST_LIB_DIR)/multiplematching.o $(MULTIPLEMATCHING_SRC)
 	$(LD) -shared -o $(TEST_LIB_DIR)/multiplematching.$(SOEXT) $(TEST_LIB_DIR)/multiplematching.o
 
-	$(AS) -o $(TEST_LIB_DIR)/twiceatzero.o test/native/libs/twiceatzero.s
+	$(AS) -o $(TEST_LIB_DIR)/twiceatzero.o $(TWICEATZERO_SRC)
 	$(LD) -shared -o $(TEST_LIB_DIR)/libtwiceatzero.$(SOEXT) $(TEST_LIB_DIR)/twiceatzero.o --section-start=.seg1=0x4000 -z max-page-size=0x1000
 endif
 

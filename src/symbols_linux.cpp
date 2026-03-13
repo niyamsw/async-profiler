@@ -76,15 +76,23 @@ static const void* getMainPhdr() {
     return main_phdr;
 }
 
-static const void* _main_phdr = getMainPhdr();
-static const char* _ld_base = (const char*)getauxval(AT_BASE);
+static const void* mainPhdr() {
+    static const void* main_phdr = getMainPhdr();
+    return main_phdr;
+}
+
+static const char* loaderBase() {
+    static const char* ld_base = (const char*)getauxval(AT_BASE);
+    return ld_base;
+}
 
 static bool isMainExecutable(const char* image_base, const void* map_end) {
-    return _main_phdr != NULL && _main_phdr >= image_base && _main_phdr < map_end;
+    const void* main_phdr = mainPhdr();
+    return main_phdr != NULL && main_phdr >= image_base && main_phdr < map_end;
 }
 
 static bool isLoader(const char* image_base) {
-    return _ld_base == image_base;
+    return loaderBase() == image_base;
 }
 
 class SymbolDesc {
@@ -151,6 +159,12 @@ struct SharedLibrary {
     const char* image_base;
 };
 
+// ADD THESE 5 LINES FOR BIG-ENDIAN SUPPORT:
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+#define ELFDATA_SUPPORTED ELFDATA2MSB
+#else
+#define ELFDATA_SUPPORTED ELFDATA2LSB
+#endif
 
 #ifdef __LP64__
 const unsigned char ELFCLASS_SUPPORTED = ELFCLASS64;
@@ -188,6 +202,9 @@ typedef Elf32_Dyn  ElfDyn;
 #elif defined(__aarch64__)
 #  define R_GLOB_DAT R_AARCH64_GLOB_DAT
 #  define R_ABS64 R_AARCH64_ABS64
+#elif defined(__s390x__)
+#  define R_GLOB_DAT R_390_GLOB_DAT
+#  define R_ABS64 R_390_64
 #elif defined(__PPC64__)
 #  define R_GLOB_DAT R_PPC64_GLOB_DAT
 #  define R_ABS64 -1
@@ -230,7 +247,7 @@ class ElfParser {
     bool validHeader() {
         unsigned char* ident = _header->e_ident;
         return ident[0] == 0x7f && ident[1] == 'E' && ident[2] == 'L' && ident[3] == 'F'
-            && ident[4] == ELFCLASS_SUPPORTED && ident[5] == ELFDATA2LSB && ident[6] == EV_CURRENT
+            && ident[4] == ELFCLASS_SUPPORTED && ident[5] == ELFDATA_SUPPORTED && ident[6] == EV_CURRENT
             && _header->e_shstrndx != SHN_UNDEF;
     }
 
@@ -272,7 +289,7 @@ class ElfParser {
     bool loadSymbolsFromDebuginfodCache(const char* build_id, const int build_id_len);
     bool loadSymbolsUsingBuildId();
     bool loadSymbolsUsingDebugLink();
-    void loadSymbolTable(const char* symbols, size_t total_size, size_t ent_size, const char* strings);
+    void loadSymbolTable(const char* symbols, size_t total_size, size_t ent_size, const char* strings, size_t str_sz = 0);
     void addRelocationSymbols(ElfSection* reltab, const char* plt);
     const char* getDebuginfodCache();
 
@@ -367,7 +384,8 @@ void ElfParser::parseDynamicSection() {
         size_t relsz = 0;
         size_t relent = 0;
         size_t relcount = 0;
-        size_t syment = 0;
+        uint32_t syment = 0;
+        uint32_t strsz = 0;
         uint32_t nsyms = 0;
 
         const char* dyn_start = at(dynamic);
@@ -379,6 +397,9 @@ void ElfParser::parseDynamicSection() {
                     break;
                 case DT_STRTAB:
                     strtab = dyn_ptr(dyn);
+                    break;
+                case DT_STRSZ:
+                    strsz = dyn->d_un.d_val;
                     break;
                 case DT_SYMENT:
                     syment = dyn->d_un.d_val;
@@ -421,7 +442,7 @@ void ElfParser::parseDynamicSection() {
         }
 
         if (!_cc->hasDebugSymbols() && nsyms > 0) {
-            loadSymbolTable(symtab, syment * nsyms, syment, strtab);
+            loadSymbolTable(symtab, syment * nsyms, syment, strtab, strsz);
         }
 
         const char* base = this->base();
@@ -430,8 +451,11 @@ void ElfParser::parseDynamicSection() {
             for (size_t offs = 0; offs < pltrelsz; offs += relent) {
                 ElfRelocation* r = (ElfRelocation*)(jmprel + offs);
                 ElfSymbol* sym = (ElfSymbol*)(symtab + ELF_R_SYM(r->r_info) * syment);
-                if (sym->st_name != 0) {
-                    _cc->addImport((void**)(base + r->r_offset), strtab + sym->st_name);
+                const char* sym_name = strtab + sym->st_name;
+                if (sym->st_name != 0 && (strsz == 0 || sym->st_name < strsz)) {
+                    // Guard: verify null-terminator within string table bounds
+                    if (strsz != 0 && strnlen(sym_name, strsz - sym->st_name) == strsz - sym->st_name) continue;
+                    _cc->addImport((void**)(base + r->r_offset), sym_name);
                 }
             }
         }
@@ -444,8 +468,11 @@ void ElfParser::parseDynamicSection() {
                 ElfRelocation* r = (ElfRelocation*)(rel + offs);
                 if (ELF_R_TYPE(r->r_info) == R_GLOB_DAT || ELF_R_TYPE(r->r_info) == R_ABS64) {
                     ElfSymbol* sym = (ElfSymbol*)(symtab + ELF_R_SYM(r->r_info) * syment);
-                    if (sym->st_name != 0) {
-                        _cc->addImport((void**)(base + r->r_offset), strtab + sym->st_name);
+                    const char* sym_name = strtab + sym->st_name;
+                    if (sym->st_name != 0 && (strsz == 0 || sym->st_name < strsz)) {
+                        // Guard: verify null-terminator within string table bounds
+                        if (strsz != 0 && strnlen(sym_name, strsz - sym->st_name) == strsz - sym->st_name) continue;
+                        _cc->addImport((void**)(base + r->r_offset), sym_name);
                     }
                 }
             }
@@ -471,6 +498,12 @@ void ElfParser::parseDwarfInfo() {
 
 uint32_t ElfParser::getSymbolCount(uint32_t* gnu_hash) {
     uint32_t nbuckets = gnu_hash[0];
+    // Sanity check for unmapped or arbitrarily large GNU_HASH tables like in Linux VDSO
+    // that can cause an immediate SIGSEGV on Big-Endian layouts if parsed linearly.
+    if (nbuckets == 0 || nbuckets > 1000000) {
+        return 0;
+    }
+
     uint32_t* buckets = &gnu_hash[4] + gnu_hash[2] * (sizeof(size_t) / 4);
 
     uint32_t nsyms = 0;
@@ -490,7 +523,7 @@ void ElfParser::loadSymbols(bool use_debug) {
     if (symtab != NULL) {
         // Parse debug symbols from the original .so
         ElfSection* strtab = section(symtab->sh_link);
-        loadSymbolTable(at(symtab), symtab->sh_size, symtab->sh_entsize, at(strtab));
+        loadSymbolTable(at(symtab), symtab->sh_size, symtab->sh_entsize, at(strtab), strtab->sh_size);
         _cc->setDebugSymbols(true);
     } else if (use_debug) {
         // Try to load symbols from an external debuginfo library
@@ -631,18 +664,32 @@ bool ElfParser::loadSymbolsUsingDebugLink() {
     return result;
 }
 
-void ElfParser::loadSymbolTable(const char* symbols, size_t total_size, size_t ent_size, const char* strings) {
+void ElfParser::loadSymbolTable(const char* symbols, size_t total_size, size_t ent_size, const char* strings, size_t str_sz) {
     const char* base = this->base();
     for (const char* symbols_end = symbols + total_size; symbols < symbols_end; symbols += ent_size) {
         ElfSymbol* sym = (ElfSymbol*)symbols;
         if (sym->st_name != 0 && sym->st_value != 0) {
+            // Guard: st_name must be within the string table
+            if (str_sz != 0 && sym->st_name >= str_sz) continue;
+
+            const char* name = strings + sym->st_name;
+
+            // Guard: verify the string is actually null-terminated within the remaining
+            // string table bounds. If not, strlen() in NativeFunc::create() would walk
+            // past the end of the mapped page causing a memcpy SIGSEGV (r3 becomes huge).
+            if (str_sz != 0) {
+                size_t max_len = str_sz - sym->st_name;
+                if (strnlen(name, max_len) == max_len) continue; // no null terminator in bounds
+            }
+
             // Skip special AArch64 mapping symbols: $x and $d
-            if (sym->st_size != 0 || sym->st_info != 0 || strings[sym->st_name] != '$') {
-                _cc->add(base + sym->st_value, (int)sym->st_size, strings + sym->st_name);
+            if (sym->st_size != 0 || sym->st_info != 0 || name[0] != '$') {
+                _cc->add(base + sym->st_value, (int)sym->st_size, name);
             }
         }
     }
 }
+
 
 void ElfParser::addRelocationSymbols(ElfSection* reltab, const char* plt) {
     ElfSection* symtab = section(reltab->sh_link);
@@ -650,6 +697,7 @@ void ElfParser::addRelocationSymbols(ElfSection* reltab, const char* plt) {
 
     ElfSection* strtab = section(symtab->sh_link);
     const char* strings = at(strtab);
+    size_t str_sz = strtab->sh_size;  // string table boundary
 
     const char* relocations = at(reltab);
     const char* relocations_end = relocations + reltab->sh_size;
@@ -661,7 +709,21 @@ void ElfParser::addRelocationSymbols(ElfSection* reltab, const char* plt) {
         if (sym->st_name == 0) {
             strcpy(name, "@plt");
         } else {
+            // Guard: st_name must be within string table bounds
+            if (str_sz != 0 && sym->st_name >= str_sz) {
+                plt += PLT_ENTRY_SIZE;
+                continue;
+            }
             const char* sym_name = strings + sym->st_name;
+            // Guard: sym_name must be null-terminated within remaining string table bounds
+            // Without this, snprintf's internal strlen walks off the mapped page on s390x
+            if (str_sz != 0) {
+                size_t max_len = str_sz - sym->st_name;
+                if (strnlen(sym_name, max_len) == max_len) {
+                    plt += PLT_ENTRY_SIZE;
+                    continue;
+                }
+            }
             snprintf(name, sizeof(name), "%s%cplt", sym_name, sym_name[0] == '_' && sym_name[1] == 'Z' ? '.' : '@');
             name[sizeof(name) - 1] = 0;
         }
@@ -670,6 +732,7 @@ void ElfParser::addRelocationSymbols(ElfSection* reltab, const char* plt) {
         plt += PLT_ENTRY_SIZE;
     }
 }
+
 
 
 Mutex Symbols::_parse_lock;

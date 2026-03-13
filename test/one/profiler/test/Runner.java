@@ -45,6 +45,8 @@ public class Runner {
             return Arch.ARM32;
         } else if (arch.contains("ppc64le")) {
             return Arch.PPC64LE;
+        } else if (arch.contains("s390x")) {
+            return Arch.S390X;
         } else if (arch.contains("riscv64")) {
             return Arch.RISCV64;
         } else if (arch.contains("loongarch64")) {

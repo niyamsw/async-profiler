@@ -93,6 +93,13 @@ CallTraceStorage::~CallTraceStorage() {
 }
 
 void CallTraceStorage::clear() {
+    if (_current_table == NULL) {
+        _current_table = LongHashTable::allocate(NULL, INITIAL_CAPACITY);
+        _allocator.clear();
+        _overflow = 0;
+        return;
+    }
+
     while (_current_table->prev() != NULL) {
         _current_table = _current_table->destroy();
     }
@@ -234,6 +241,15 @@ u32 CallTraceStorage::put(int num_frames, ASGCT_CallFrame* frames, u64 counter) 
     u64 hash = calcHash(num_frames, frames);
 
     LongHashTable* table = _current_table;
+    if (table == NULL) {
+        table = LongHashTable::allocate(NULL, INITIAL_CAPACITY);
+        if (table == NULL) {
+            atomicInc(_overflow);
+            return OVERFLOW_TRACE_ID;
+        }
+        _current_table = table;
+    }
+
     u64* keys = table->keys();
     u32 capacity = table->capacity();
     u32 slot = hash & (capacity - 1);

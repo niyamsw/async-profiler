@@ -33,6 +33,12 @@ void* SafeAccess::load(void** ptr, void* default_value) {
 #elif defined(__aarch64__)
     register void* ret asm("x0");
     asm volatile("ldr %0, [%1]" : "=r"(ret) : "r"(ptr), "r"(default_value));
+#elif defined(__s390x__)
+    // Keep default_value in r3: SafeAccess::checkFault copies arg1 -> retval on fault.
+    register void* ret asm("2");
+    register void* p asm("4") = ptr;
+    register void* def asm("3") = default_value;
+    asm volatile("lg %0,0(%1)" : "=d"(ret) : "a"(p), "d"(def));
 #else
     asm volatile("" : : "r"(default_value));  // prevent compiler from optimizing the argument away
     void* ret = *ptr;
@@ -76,6 +82,21 @@ bool SafeAccess::checkFault(StackFrame& frame) {
 #elif defined(__i386__)
     // eax already holds default_value
     frame.pc() += 2;
+#elif defined(__s390x__)
+    // s390 instructions are variable-length: 2, 4 or 6 bytes.
+    switch (*(u8*)pc >> 6) {
+        case 0:
+            frame.pc() += 2;
+            break;
+        case 1:
+        case 2:
+            frame.pc() += 4;
+            break;
+        default:
+            frame.pc() += 6;
+            break;
+    }
+    frame.retval() = frame.arg1();
 #else
     frame.pc() += sizeof(instruction_t);
     frame.retval() = frame.arg1();

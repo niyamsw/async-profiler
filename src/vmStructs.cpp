@@ -532,14 +532,32 @@ void VMStructs::resolveOffsets() {
     _can_dereference_jmethod_id = _has_method_structs && VM::hotspot_version() <= 25;
 
     if (_code_heap_addr != NULL && _code_heap_low_addr != NULL && _code_heap_high_addr != NULL) {
-        char* code_heaps = *_code_heap_addr;
-        unsigned int code_heap_count = *(unsigned int*)(code_heaps + _array_len_offset);
-        if (code_heap_count <= 3 && _array_data_offset >= 0) {
-            char* code_heap_array = *(char**)(code_heaps + _array_data_offset);
-            memcpy(_code_heap, code_heap_array, code_heap_count * sizeof(_code_heap[0]));
-        }
         _code_heap_low = *_code_heap_low_addr;
         _code_heap_high = *_code_heap_high_addr;
+
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        _code_heap[0] = NULL;
+        _code_heap[1] = NULL;
+        _code_heap[2] = NULL;
+#else
+        char* code_heaps = *_code_heap_addr;
+        unsigned int code_heap_count = 0;
+
+        if (_array_len_offset >= 0) {
+            code_heap_count = *(unsigned int*)(code_heaps + _array_len_offset);
+        }
+
+        if (code_heap_count <= 3 && _array_data_offset >= 0) {
+            char** code_heap_array = *(char***)(code_heaps + _array_data_offset);
+            for (unsigned int i = 0; i < code_heap_count; i++) {
+                _code_heap[i] = code_heap_array[i];
+            }
+            for (unsigned int i = code_heap_count; i < 3; i++) {
+                _code_heap[i] = NULL;
+            }
+        }
+#endif
+
     } else if (_code_heap_addr != NULL && _code_heap_memory_offset >= 0) {
         _code_heap[0] = *_code_heap_addr;
         _code_heap_low = *(const void**)(_code_heap[0] + _code_heap_memory_offset + _vs_low_bound_offset);

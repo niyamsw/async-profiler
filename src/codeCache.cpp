@@ -79,7 +79,7 @@ void CodeCache::add(const void* start, int length, const char* name, bool update
     char* name_copy = NativeFunc::create(name, _lib_index);
     // Replace non-printable characters
     for (char* s = name_copy; *s != 0; s++) {
-        if (*s < ' ') *s = '?';
+        if ((signed char)*s < ' ') *s = '?';
     }
 
     if (_count >= _capacity) {

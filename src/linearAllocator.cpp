@@ -18,6 +18,14 @@ LinearAllocator::~LinearAllocator() {
 }
 
 void LinearAllocator::clear() {
+    if (_tail == NULL) {
+        _reserve = _tail = allocateChunk(NULL);
+        return;
+    }
+    if (_reserve == NULL) {
+        _reserve = _tail;
+    }
+
     if (_reserve->prev == _tail) {
         freeChunk(_reserve);
     }
@@ -67,7 +75,9 @@ Chunk* LinearAllocator::allocateChunk(Chunk* current) {
 }
 
 void LinearAllocator::freeChunk(Chunk* current) {
-    OS::safeFree(current, _chunk_size);
+    if (current != NULL) {
+        OS::safeFree(current, _chunk_size);
+    }
 }
 
 void LinearAllocator::reserveChunk(Chunk* current) {
